@@ -93,6 +93,7 @@ init([Id, Params]) ->
         author => mzb_bc:maps_get(author, Params, "anonymous"),
         benchmark_name => BenchName,
         nodes_arg => maps:get(nodes, Params),
+        exclusive => maps:get(exclusive, Params),
         script => generate_script_filename(maps:get(script, Params)),
         purpose => Purpose,
         node_install_spec => NodeInstallSpec,
@@ -160,6 +161,7 @@ init([Id, Params]) ->
 workflow_config(_State) ->
     [{pipeline, [ init,
                   checking_script,
+                  wait_exclusive,
                   allocating_hosts,
                   provisioning,
                   connect_nodes,
@@ -175,7 +177,8 @@ workflow_config(_State) ->
                   sending_email_report,
                   stopping_collectors,
                   cleaning_nodes,
-                  deallocating_hosts
+                  deallocating_hosts,
+                  release_exclusive
                 ]},
      {unstoppable, [allocating_hosts]}].
 
@@ -197,6 +200,11 @@ handle_stage(pipeline, checking_script, #{config:= Config}) ->
             erlang:error({type_error, Reason, Location});
         _ -> ok
     end,
+    fun (S) -> S end;
+
+handle_stage(pipeline, wait_exclusive, #{id:= Id, config:= Config}) ->
+    #{exclusive:= Exclusive} = Config,
+    mzb_api_exclusive:check(Id, Exclusive),
     fun (S) -> S end;
 
 handle_stage(pipeline, allocating_hosts, #{config:= Config} = State) ->
@@ -366,6 +374,9 @@ handle_stage(finalize, cleaning_nodes,
     mzb_api_provision:clean_nodes(Config, get_logger(State));
 handle_stage(finalize, cleaning_nodes, State) ->
     info("Skip cleaning nodes. Unknown nodes", [], State);
+
+handle_stage(finalize, release_exclusive, #{id:= Id, config:= #{exclusive:= Exclusive}}) ->
+    mzb_api_exclusive:release(Id, Exclusive);
 
 handle_stage(finalize, deallocating_hosts, #{config:= #{deallocate_after_bench:= false}} = State) ->
     info("Skip deallocation. Deallocate after bench is false", [], State);
@@ -638,7 +649,7 @@ script_path(Script) ->
     end.
 
 run_periodically(StartTime, MaxTime, RetryTimeoutSec, Fn) ->
-    case Fn() of 
+    case Fn() of
         ok -> ok;
         retry ->
             TimeSinceStart = seconds() -  StartTime,
@@ -696,7 +707,7 @@ allocate_hosts(#{nodes_arg:= [HostsStr]}, _Logger) when is_list(HostsStr) ->
 
     if erlang:length(Hosts) >= 2 ->
             {Hosts, UserName, undefined};
-        true -> 
+        true ->
             erlang:error(not_enough_nodes)
     end.
 
