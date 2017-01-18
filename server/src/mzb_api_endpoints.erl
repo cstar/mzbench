@@ -316,7 +316,7 @@ handle(<<"GET">>, <<"/remove_cluster_info">>, _Login, Req) ->
         _:not_found -> erlang:error({not_found, "Cluster not found"})
     end;
 
-handle(<<"GET">>, <<"/add_tags">>, _Login, Req) ->
+handle(<<"GET">>, <<"/add_tags">>, Login, Req) ->
     with_bench_id(Req, fun(Id) ->
         Tags =
             try
@@ -327,11 +327,11 @@ handle(<<"GET">>, <<"/add_tags">>, _Login, Req) ->
                     erlang:error({badarg, "Missing tags argument"})
             end,
 
-        ok = mzb_api_server:add_tags(Id, Tags),
+        ok = mzb_api_server:add_tags(Id, Tags, Login),
         {ok, reply_json(200, #{}, Req), #{}}
     end);
 
-handle(<<"GET">>, <<"/remove_tags">>, _Login, Req) ->
+handle(<<"GET">>, <<"/remove_tags">>, Login, Req) ->
     with_bench_id(Req, fun(Id) ->
         Tags =
             try
@@ -342,7 +342,7 @@ handle(<<"GET">>, <<"/remove_tags">>, _Login, Req) ->
                     erlang:error({badarg, "Missing tags argument"})
             end,
 
-        ok = mzb_api_server:remove_tags(Id, Tags),
+        ok = mzb_api_server:remove_tags(Id, Tags, Login),
         {ok, reply_json(200, #{}, Req), #{}}
     end);
 

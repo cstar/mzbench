@@ -8,6 +8,7 @@
     auth_connection/3,
     auth_connection_by_ref/2,
     sign_out_connection/1,
+    check_admin_listed/1,
     auth_api_call/3,
     generate_token/2,
     get_auth_methods/0,
@@ -130,7 +131,11 @@ auth_api_call(_Method, Path, Ref) ->
 
 auth_api_call_ref(_Path, {token, Token}) ->
     case get_user_info(Token) of
-        {ok, UserInfo} -> maps:get(login, UserInfo);
+        {ok, UserInfo} -> Login = maps:get(login, UserInfo),
+                case check_black_white_listed(Login) of
+                    ok -> Login;
+                    fail -> erlang:error(forbidden)
+                end;
         {error, unknown_ref} -> erlang:error(forbidden)
     end;
 auth_api_call_ref(Path, {cookie, Cookie, Token}) when (Path == <<"/stop">>)
@@ -138,7 +143,10 @@ auth_api_call_ref(Path, {cookie, Cookie, Token}) when (Path == <<"/stop">>)
     case dets:lookup(auth_tokens, Cookie) of
         [{_, #{user_info:= #{login := Login}, connection_pids:= Pids}}] ->
                 case lists:member(Token, maps:values(Pids)) of
-                    true -> Login;
+                    true -> case check_black_white_listed(Login) of
+                                ok -> Login;
+                                fail -> erlang:error(forbidden)
+                            end;
                     false -> erlang:error(forbidden)
                 end;
         [] -> erlang:error(forbidden)
@@ -157,8 +165,8 @@ add_connection(ConnectionPid, UserInfo) ->
     ok = gen_server:call(?MODULE, {add_connection, ConnectionPid, Ref, UserInfo}),
     Ref.
 
-generate_token(Lifetime, Ref) ->
-    case gen_server:call(?MODULE, {generate_token, Lifetime, Ref}) of
+generate_token(Lifetime, UserInfo) ->
+    case gen_server:call(?MODULE, {generate_token, Lifetime, UserInfo}) of
         {ok, Token} -> Token;
         {error, Reason} -> erlang:error(Reason)
     end.
@@ -222,8 +230,12 @@ handle_call({auth_connection_by_ref, ConnectionPid, Ref}, _From, State = #s{star
         _ ->
             case get_user_info(Ref) of
                 {ok, UserInfo} ->
-                    EditToken = insert(ConnectionPid, Ref, UserInfo, StartId),
-                    {reply, {ok, UserInfo, EditToken}, State};
+                    case check_black_white_listed(maps:get(login, UserInfo)) of
+                        ok ->
+                            EditToken = insert(ConnectionPid, Ref, UserInfo, StartId),
+                            {reply, {ok, UserInfo, EditToken}, State};
+                        fail -> {reply, {error, forbidden}, State}
+                    end;
                 {error, Reason} ->
                     {reply, {error, Reason}, State}
             end
@@ -234,15 +246,10 @@ handle_call({remove_connection, Ref}, _From, State) ->
     dets:sync(auth_tokens),
     {reply, ok, State};
 
-handle_call({generate_token, Lifetime, Ref}, _From, State = #s{start_id = StartId}) ->
-    case get_user_info(Ref) of
-        {ok, UserInfo} ->
-            Token = generate_ref(),
-            insert(cli, Token, UserInfo, StartId, Lifetime),
-            {reply, {ok, Token}, State};
-        {error, unknown_ref} ->
-            {reply, {error, forbidden}, State}
-    end;
+handle_call({generate_token, Lifetime, UserInfo}, _From, State = #s{start_id = StartId}) ->
+    Token = generate_ref(),
+    insert(cli, Token, UserInfo, StartId, Lifetime),
+    {reply, {ok, Token}, State};
 
 handle_call(_Request, _From, State) ->
     {noreply, State}.
@@ -398,6 +405,23 @@ get_opts(Type) ->
     case proplists:get_value(Type, get_methods(), undefined) of
         undefined -> erlang:error({unknown_auth_method, Type});
         Opts -> Opts
+    end.
+
+check_admin_listed(Login) ->
+    lists:member(Login, application:get_env(mzbench_api, admin_list, [])).
+
+check_black_white_listed(Login) ->
+    BlackList = application:get_env(mzbench_api, black_list, []),
+    WhiteList = application:get_env(mzbench_api, white_list, []),
+    case lists:member(Login, BlackList) of
+        true -> fail;
+        false -> if WhiteList == [] -> ok;
+                    true ->
+                        case lists:member(Login, WhiteList) of
+                            true -> ok;
+                            false -> fail
+                        end
+                 end
     end.
 
 remove_connection(_, '$end_of_table') -> ok;

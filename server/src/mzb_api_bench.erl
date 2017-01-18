@@ -14,8 +14,8 @@
     log_user_file/1,
     metrics_file/2,
     remote_path/2,
-    add_tags/2,
-    remove_tags/2
+    add_tags/3,
+    remove_tags/3
 ]).
 
 
@@ -46,24 +46,30 @@ change_env(Pid, Env, root) ->
 change_env(Pid, Env, Login) ->
     case mzb_pipeline:call(Pid, get_author) of
         Login -> change_env(Pid, Env, root);
-        _ -> {error, forbidden}
+        _ -> case mzb_api_auth:check_admin_listed(Login) of
+                true -> change_env(Pid, Env, root);
+                false -> {error, forbidden}
+            end
     end.
 
 interrupt_bench(Pid, root) -> mzb_pipeline:stop(Pid);
 interrupt_bench(Pid, Login) ->
     case mzb_pipeline:call(Pid, get_author) of
         Login -> mzb_pipeline:stop(Pid);
-        _ -> {error, forbidden}
+        _ -> case mzb_api_auth:check_admin_listed(Login) of
+                true -> mzb_pipeline:stop(Pid);
+                false -> {error, forbidden}
+            end
     end.
 
 request_report(Pid, Emails) ->
     mzb_pipeline:call(Pid, {request_report, Emails}).
 
-add_tags(Pid, Tags) ->
-    mzb_pipeline:call(Pid, {add_tags, Tags}).
+add_tags(Pid, Tags, Login) ->
+    mzb_pipeline:call(Pid, {add_tags, Tags, Login}).
 
-remove_tags(Pid, Tags) ->
-    mzb_pipeline:call(Pid, {remove_tags, Tags}).
+remove_tags(Pid, Tags, Login) ->
+    mzb_pipeline:call(Pid, {remove_tags, Tags, Login}).
 
 init([Id, Params]) ->
     Now = os:timestamp(),
@@ -419,18 +425,24 @@ handle_call({change_env, Env}, From, #{status:= running, config:= Config, cluste
 handle_call({change_env, _Env}, _From, #{} = State) ->
     {reply, {error, not_running}, State};
 
-handle_call({add_tags, Tags}, _From, #{config:= Config} = State) ->
-    info("Add tags: ~p / ~p", [Tags, mzb_bc:maps_get(tags, Config, [])], State),
-    OldTags = mzb_bc:maps_get(tags, Config, []),
-    NewTags = OldTags ++ [T || T <- Tags, not lists:member(T, OldTags)],
-    NewState = maps:put(config, maps:put(tags, NewTags, Config), State),
-    {reply, ok, NewState};
+handle_call({add_tags, Tags, Login}, _From, #{config:= #{author := Author} = Config} = State) ->
+    IsAdmin = mzb_api_auth:check_admin_listed(Login),
+    if (Login /= Author) and (not IsAdmin) -> {error, forbidden};
+        true -> info("Add tags: ~p / ~p", [Tags, mzb_bc:maps_get(tags, Config, [])], State),
+                OldTags = mzb_bc:maps_get(tags, Config, []),
+                NewTags = OldTags ++ [T || T <- Tags, not lists:member(T, OldTags)],
+                NewState = maps:put(config, maps:put(tags, NewTags, Config), State),
+                {reply, ok, NewState}
+    end;
 
-handle_call({remove_tags, Tags}, _From, #{config:= Config} = State) ->
-    info("Remove tags: ~p", [Tags], State),
-    NewTags = mzb_bc:maps_get(tags, Config, []) -- Tags,
-    NewState = maps:put(config, maps:put(tags, NewTags, Config), State),
-    {reply, ok, NewState};
+handle_call({remove_tags, Tags, Login}, _From, #{config:= #{author := Author} = Config} = State) ->
+    IsAdmin = mzb_api_auth:check_admin_listed(Login),
+    if (Login /= Author) and (not IsAdmin) -> {error, forbidden};
+        true -> info("Remove tags: ~p", [Tags], State),
+                NewTags = mzb_bc:maps_get(tags, Config, []) -- Tags,
+                NewState = maps:put(config, maps:put(tags, NewTags, Config), State),
+                {reply, ok, NewState}
+    end;
 
 handle_call(get_author, _From, #{config:= Config} = State) ->
     {reply, maps:get(author, Config), State};

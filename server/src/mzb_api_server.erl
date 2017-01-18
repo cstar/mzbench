@@ -19,8 +19,8 @@
     config_info/0,
     email_report/2,
     is_datastream_ended/1,
-    add_tags/2,
-    remove_tags/2
+    add_tags/3,
+    remove_tags/3
 ]).
 
 %% gen_server callbacks
@@ -50,7 +50,7 @@ config_info() ->
             {ok, [ServerConfig | _]} = application:get_env(mzbench_api, server_configs),
             io:format("No config file is used, to create one run:~n"),
             io:format("cp ~s ~s~n", [AutoConfig, ServerConfig]);
-        Filename -> 
+        Filename ->
             io:format("Active config file is ~s~n", [Filename])
     end.
 
@@ -108,17 +108,17 @@ is_datastream_ended(Id) ->
         [] -> erlang:error({not_found, io_lib:format("Benchmark ~p is not found", [Id])})
     end.
 
-add_tags(Id, Tags) ->
+add_tags(Id, Tags, Login) ->
     Res =
         case ets:lookup(benchmarks, Id) of
             [{_, B, undefined}] when is_pid(B) ->
                 try
-                    mzb_api_bench:add_tags(B, Tags)
+                    mzb_api_bench:add_tags(B, Tags, Login)
                 catch
-                    exit:{no_proc, _} -> gen_server:call(?MODULE, {add_tags, Id, Tags})
+                    exit:{no_proc, _} -> gen_server:call(?MODULE, {add_tags, Id, Tags, Login})
                 end;
             _ ->
-                gen_server:call(?MODULE, {add_tags, Id, Tags})
+                gen_server:call(?MODULE, {add_tags, Id, Tags, Login})
         end,
     case Res of
         ok ->
@@ -128,17 +128,17 @@ add_tags(Id, Tags) ->
         {error, invalid_benchmark} -> erlang:error({invalid_benchmark, io_lib:format("Benchmark ~p is in invalid state", [Id])})
     end.
 
-remove_tags(Id, Tags) ->
+remove_tags(Id, Tags, Login) ->
     Res =
         case ets:lookup(benchmarks, Id) of
             [{_, B, undefined}] when is_pid(B) ->
                 try
-                    mzb_api_bench:remove_tags(B, Tags)
+                    mzb_api_bench:remove_tags(B, Tags, Login)
                 catch
-                    exit:{no_proc, _} -> gen_server:call(?MODULE, {remove_tags, Id, Tags})
+                    exit:{no_proc, _} -> gen_server:call(?MODULE, {remove_tags, Id, Tags, Login})
                 end;
             _ ->
-                gen_server:call(?MODULE, {remove_tags, Id, Tags})
+                gen_server:call(?MODULE, {remove_tags, Id, Tags, Login})
         end,
     case Res of
         ok ->
@@ -362,9 +362,9 @@ handle_call(is_ready, _, #{status:= active} = State) ->
 handle_call(is_ready, _, #{status:= inactive} = State) ->
     {reply, false, State};
 
-handle_call({add_tags, Id, Tags}, _, State) ->
+handle_call({add_tags, Id, Tags, Login}, _, State) ->
     case ets:lookup(benchmarks, Id) of
-        [{_, _, Status = #{config:= Config}}] ->
+        [{_, _, Status = #{config:= #{author:= Login} = Config}}] ->
             OldTags = mzb_bc:maps_get(tags, Config, []),
             NewTags = OldTags ++ [T || T <- Tags, not lists:member(T, OldTags)],
             NewStatus = maps:put(config, maps:put(tags, NewTags, Config), Status),
@@ -374,9 +374,9 @@ handle_call({add_tags, Id, Tags}, _, State) ->
         [] -> {reply, {error, not_found}, State}
     end;
 
-handle_call({remove_tags, Id, Tags}, _, State) ->
+handle_call({remove_tags, Id, Tags, Login}, _, State) ->
     case ets:lookup(benchmarks, Id) of
-        [{_, _, Status = #{config:= Config}}] ->
+        [{_, _, Status = #{config:= #{author:= Login} = Config}}] ->
             NewTags = mzb_bc:maps_get(tags, Config, []) -- Tags,
             NewStatus = maps:put(config, maps:put(tags, NewTags, Config), Status),
             save_results(Id, NewStatus, State),
@@ -551,4 +551,3 @@ sys_username() ->
             end;
         User -> User
     end.
-
