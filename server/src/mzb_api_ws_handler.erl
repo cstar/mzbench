@@ -444,7 +444,8 @@ dispatch_request(#{<<"cmd">> := <<"stop_streaming_logs">>} = Cmd,
 dispatch_request(#{<<"cmd">> := <<"add_tag">>} = Cmd, #state{user_info = #{login := Login}} = State) ->
     #{<<"bench">> := BenchId, <<"tag">> := Tag} = Cmd,
     try
-        ok = mzb_api_server:add_tags(BenchId, [binary_to_list(Tag)], Login)
+        mzb_api_auth:auth_api_call(<<"POST">>, <<"/add_tag">>, {login, Login}, BenchId),
+        ok = mzb_api_server:add_tags(BenchId, [binary_to_list(Tag)])
     catch
         _:Exception ->
             Str =
@@ -460,7 +461,8 @@ dispatch_request(#{<<"cmd">> := <<"add_tag">>} = Cmd, #state{user_info = #{login
 dispatch_request(#{<<"cmd">> := <<"remove_tag">>} = Cmd, #state{user_info = #{login := Login}} = State) ->
     #{<<"bench">> := BenchId, <<"tag">> := Tag} = Cmd,
     try
-        ok = mzb_api_server:remove_tags(BenchId, [binary_to_list(Tag)], Login)
+        mzb_api_auth:auth_api_call(<<"POST">>, <<"/remove_tag">>, {login, Login}, BenchId),
+        ok = mzb_api_server:remove_tags(BenchId, [binary_to_list(Tag)])
     catch
         _:Exception ->
             Str =

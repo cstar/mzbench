@@ -8,8 +8,7 @@
     auth_connection/3,
     auth_connection_by_ref/2,
     sign_out_connection/1,
-    check_admin_listed/1,
-    auth_api_call/3,
+    auth_api_call/4,
     generate_token/2,
     get_auth_methods/0,
     get_user_table/0 % for debug only
@@ -121,40 +120,54 @@ auth_connection(ConnectionPid, "google" = Type, Code) ->
 auth_connection_by_ref(ConnectionPid, Ref) ->
     gen_server:call(?MODULE, {auth_connection_by_ref, ConnectionPid, Ref}).
 
-auth_api_call(<<"POST">>, <<"/auth">>, _Ref) -> "default";
-auth_api_call(<<"GET">>, <<"/github_auth">>, _Ref) -> "default";
-auth_api_call(_Method, Path, Ref) ->
+auth_api_call(<<"POST">>, <<"/auth">>, _Ref, _BenchId) -> "default";
+auth_api_call(<<"GET">>, <<"/github_auth">>, _Ref, _BenchId) -> "default";
+auth_api_call(_Method, Path, Ref, BenchId) ->
     case get_methods() of
         [] -> "anonymous";
-        _ -> auth_api_call_ref(Path, Ref)
+        _ -> auth_api_call_ref(Path, Ref, BenchId)
     end.
 
-auth_api_call_ref(_Path, {token, Token}) ->
+auth_api_call_ref(Path, {login, Login}, BenchId) ->
+    auth_login_access(Path, Login, BenchId);
+auth_api_call_ref(Path, {token, Token}, BenchId) ->
     case get_user_info(Token) of
-        {ok, UserInfo} -> Login = maps:get(login, UserInfo),
-                case check_black_white_listed(Login) of
-                    ok -> Login;
-                    fail -> erlang:error(forbidden)
-                end;
+        {ok, UserInfo} -> auth_login_access(Path, maps:get(login, UserInfo), BenchId);
         {error, unknown_ref} -> erlang:error(forbidden)
     end;
-auth_api_call_ref(Path, {cookie, Cookie, Token}) when (Path == <<"/stop">>)
+auth_api_call_ref(Path, {cookie, Cookie, Token}, BenchId) when (Path == <<"/stop">>)
                     or (Path == <<"/restart">>) or (Path == <<"/change_env">>) ->
     case dets:lookup(auth_tokens, Cookie) of
         [{_, #{user_info:= #{login := Login}, connection_pids:= Pids}}] ->
                 case lists:member(Token, maps:values(Pids)) of
-                    true -> case check_black_white_listed(Login) of
-                                ok -> Login;
-                                fail -> erlang:error(forbidden)
-                            end;
+                    true -> auth_login_access(Path, Login, BenchId);
                     false -> erlang:error(forbidden)
                 end;
         [] -> erlang:error(forbidden)
     end;
-auth_api_call_ref(_Path, {cookie, Cookie, _}) ->
+auth_api_call_ref(Path, {cookie, Cookie, _}, BenchId) ->
     case get_user_info(Cookie) of
-        {ok, UserInfo} -> maps:get(login, UserInfo);
+        {ok, UserInfo} -> auth_login_access(Path, maps:get(login, UserInfo), BenchId);
         {error, unknown_ref} -> erlang:error(forbidden)
+    end.
+
+auth_login_access(Path, Login, BenchId) when (Path == <<"/stop">>)
+                    or (Path == <<"/restart">>) or (Path == <<"/change_env">>)
+                    or (Path == <<"/add_tag">>) or (Path == <<"/remove_tag">>) ->
+    case check_admin_listed(Login) of
+        true -> Login;
+        false -> _ = check_listed_or_fail(Login),
+                #{config:= #{author := Author}} = mzb_api_bench:status(BenchId),
+                if Author == Login -> Login;
+                    true ->  erlang:error(forbidden)
+                end
+    end;
+auth_login_access(_, Login, _) -> check_listed_or_fail(Login).
+
+check_listed_or_fail(Login) ->
+    case check_black_white_listed(Login) of
+        ok -> Login;
+        fail -> erlang:error(forbidden)
     end.
 
 sign_out_connection(Ref) ->
